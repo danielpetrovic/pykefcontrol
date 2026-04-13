@@ -3328,7 +3328,7 @@ class KefConnector:
         Song length in ms
         """
         if self.is_playing:
-            return self._get_player_data()["status"]["duration"]
+            return self._get_player_data().get("status", {}).get("duration")
         else:
             return None
 
@@ -4513,7 +4513,9 @@ class KefAsyncConnector:
                     "aiohttp is required for KefAsyncConnector. "
                     "Install it with: pip install aiohttp"
                 )
-            self._session = aiohttp.ClientSession()
+            self._session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(force_close=True)
+            )
 
     async def power_on(self):
         """power on speaker"""
@@ -6953,7 +6955,7 @@ class KefAsyncConnector:
         """Song length in ms"""
         if await self.is_playing:
             json_output = await self._get_player_data()
-            return json_output["status"]["duration"]
+            return json_output.get("status", {}).get("duration")
         else:
             return None
 
