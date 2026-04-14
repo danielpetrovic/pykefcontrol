@@ -3202,7 +3202,10 @@ class KefConnector:
         """
         Is the speaker currently playing
         """
-        return self._get_player_data()["state"] == "playing"
+        data = self._get_player_data()
+        if not data or not isinstance(data, dict):
+            return False
+        return data.get("state") == "playing"
 
     @property
     def song_length(self):
@@ -6723,7 +6726,9 @@ class KefAsyncConnector:
     async def is_playing(self):
         """Is the speaker currently playing"""
         json_output = await self._get_player_data()
-        return json_output["state"] == "playing"
+        if not json_output or not isinstance(json_output, dict):
+            return False
+        return json_output.get("state") == "playing"
 
     @property
     async def song_length(self):
