@@ -132,6 +132,24 @@ SUB_GAIN_NEUTRAL = 10  # 0dB
 KEF_RELEASE_NOTES_URL = "https://assets.kef.com/pm/pm_firmware/release_notes.html"
 
 
+_POST_FIRMWARE_THRESHOLDS = {
+    "LS50WII":      4000,   # >= v4.0  (V4000+, already released)
+    "LSXIILT":      2000,   # >= v2.0  (V2000+, already released)
+    "LSXII":        3000,   # >= v3.0  (V3000+, upcoming)
+    "LS60Wireless": 3000,   # >= v3.0  (V3000+, upcoming)
+}
+_MODEL_ALIASES = {"LS50W2": "LS50WII", "LSX2LT": "LSXIILT"}
+
+
+_POST_FIRMWARE_THRESHOLDS = {
+    "LS50WII":      4000,   # >= v4.0  (V4000+, already released)
+    "LSXIILT":      2000,   # >= v2.0  (V2000+, already released)
+    "LSXII":        3000,   # >= v3.0  (V3000+, upcoming)
+    "LS60Wireless": 3000,   # >= v3.0  (V3000+, upcoming)
+}
+_MODEL_ALIASES = {"LS50W2": "LS50WII", "LSX2LT": "LSXIILT"}
+
+
 class _KEFReleaseNotesParser(HTMLParser):
     """Parser for KEF firmware release notes HTML"""
 
@@ -302,8 +320,10 @@ def get_kef_firmware_releases(model_filter=None, timeout=10):
 
 
 class KefConnector:
-    def __init__(self, host, port=80, profile_dir=None):
+    def __init__(self, host, port=80, profile_dir=None, model=None):
         self.host = host
+        self._speaker_model = _MODEL_ALIASES.get(model, model)
+        self._fw_version_int = None
         self.port = port
         self.previous_volume = self.volume
         self.last_polled = None
@@ -355,10 +375,62 @@ class KefConnector:
             "value": """{{"control":"{command}"}}""".format(command=command),
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
+        self._set_data(payload)
+    def _set_data(self, payload):
+        """Send a setData request, using POST or GET depending on firmware version."""
+        if self._speaker_model is None:
+            self._speaker_model = _MODEL_ALIASES.get(self.speaker_model, self.speaker_model)
+        if self._fw_version_int is None:
+            try:
+                self._fw_version_int = int(self.firmware_version[1:])
+            except (ValueError, IndexError):
+                self._fw_version_int = 0
+        threshold = _POST_FIRMWARE_THRESHOLDS.get(self._speaker_model)
+        if threshold and self._fw_version_int >= threshold:
+            post_payload = dict(payload)
+            if isinstance(post_payload.get("value"), str):
+                try:
+                    post_payload["value"] = json.loads(post_payload["value"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            with requests.post(
+                "http://" + self.host + "/api/setData", json=post_payload
+            ) as response:
+                return response.json()
+        else:
+            with requests.get(
+                "http://" + self.host + "/api/setData", params=payload
+            ) as response:
+                return response.json()
+
+
+    def _set_data(self, payload):
+        """Send a setData request, using POST or GET depending on firmware version."""
+        if self._speaker_model is None:
+            self._speaker_model = _MODEL_ALIASES.get(self.speaker_model, self.speaker_model)
+        if self._fw_version_int is None:
+            try:
+                self._fw_version_int = int(self.firmware_version[1:])
+            except (ValueError, IndexError):
+                self._fw_version_int = 0
+        threshold = _POST_FIRMWARE_THRESHOLDS.get(self._speaker_model)
+        if threshold and self._fw_version_int >= threshold:
+            post_payload = dict(payload)
+            if isinstance(post_payload.get("value"), str):
+                try:
+                    post_payload["value"] = json.loads(post_payload["value"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            with requests.post(
+                "http://" + self.host + "/api/setData", json=post_payload
+            ) as response:
+                return response.json()
+        else:
+            with requests.get(
+                "http://" + self.host + "/api/setData", params=payload
+            ) as response:
+                return response.json()
+
 
     def set_volume(self, volume):
         """
@@ -448,11 +520,7 @@ class KefConnector:
             "value": f'{{"type":"i32_","i32_":{volume}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_all_default_volumes(self):
         """Get default volumes for all input sources on this speaker model.
 
@@ -569,9 +637,7 @@ class KefConnector:
                 "roles": "value",
                 "value": f'{{"type":"i32_","i32_":{max_volume}}}',
             }
-            with requests.get("http://" + self.host + "/api/setData", params=payload) as response:
-                pass
-
+            self._set_data(payload)
         if step is not None:
             if not 1 <= step <= 10:
                 raise ValueError(f"step must be between 1 and 10, got {step}")
@@ -580,18 +646,14 @@ class KefConnector:
                 "roles": "value",
                 "value": f'{{"type":"i16_","i16_":{step}}}',
             }
-            with requests.get("http://" + self.host + "/api/setData", params=payload) as response:
-                pass
-
+            self._set_data(payload)
         if limit is not None:
             payload = {
                 "path": "settings:/kef/host/volumeLimit",
                 "roles": "value",
                 "value": f'{{"type":"bool_","bool_":{str(limit).lower()}}}',
             }
-            with requests.get("http://" + self.host + "/api/setData", params=payload) as response:
-                pass
-
+            self._set_data(payload)
     def get_standby_volume_behavior(self):
         """Get standby volume behavior setting.
 
@@ -631,11 +693,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(not use_global).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_startup_volume_enabled(self):
         """Get whether startup volume feature is enabled.
 
@@ -679,11 +737,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     # Network Diagnostics Methods (Phase 4)
     def ping_internet(self):
         """Ping internet to check connectivity.
@@ -868,11 +922,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_standby_mode(self):
         """Get auto-standby mode setting.
 
@@ -915,11 +965,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{mode}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_startup_tone(self):
         """Get startup tone setting.
 
@@ -956,11 +1002,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_subwoofer_wake_on_startup(self):
         """Get wake subwoofer on startup setting.
 
@@ -1000,11 +1042,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_kw1_wake_on_startup(self):
         """Get KW1 wake on startup setting.
 
@@ -1046,11 +1084,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_wake_source(self):
         """Get wake-up source setting.
 
@@ -1091,11 +1125,7 @@ class KefConnector:
             "value": f'{{"type":"kefWakeUpSource","kefWakeUpSource":"{source}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_usb_charging(self):
         """Get USB charging setting.
 
@@ -1132,11 +1162,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_cable_mode(self):
         """Get cable mode (wired/wireless inter-speaker connection).
 
@@ -1177,11 +1203,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{mode}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_master_channel(self):
         """Get master channel (left/right speaker designation).
 
@@ -1222,11 +1244,7 @@ class KefConnector:
             "value": f'{{"type":"kefMasterChannelMode","kefMasterChannelMode":"{channel}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_speaker_status(self):
         """Get speaker power status.
 
@@ -1296,11 +1314,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_standby_led(self):
         """Get standby LED setting.
 
@@ -1340,11 +1354,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_top_panel_enabled(self):
         """Get top panel (touch controls) enabled setting.
 
@@ -1384,11 +1394,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_top_panel_led(self):
         """Get top panel LED setting (XIO only).
 
@@ -1431,11 +1437,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_top_panel_standby_led(self):
         """Get top panel standby LED setting (XIO only).
 
@@ -1478,11 +1480,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     # ===== Remote Control Methods =====
 
     def get_remote_ir_enabled(self):
@@ -1522,11 +1520,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_ir_code_set(self):
         """Get IR code set (used to avoid conflicts with other devices).
 
@@ -1569,11 +1563,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{code_set}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_eq_button(self, button_num):
         """Get EQ button preset (XIO soundbar only).
 
@@ -1626,11 +1616,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{preset}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_favourite_button_action(self):
         """Get favourite button action.
 
@@ -1667,11 +1653,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{action}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_fixed_volume_mode(self):
         """Get fixed volume mode setting.
 
@@ -1718,11 +1700,7 @@ class KefConnector:
             "value": f'{{"type":"i32_","i32_":{volume}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     # ===== XIO Calibration Methods =====
 
     def get_calibration_status(self):
@@ -1842,11 +1820,7 @@ class KefConnector:
             "value": "{}",
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-            return json_output
+        self._set_data(payload)
 
     def stop_calibration(self):
         """Stop room calibration in progress (XIO soundbar only).
@@ -1862,11 +1836,7 @@ class KefConnector:
             "value": "{}",
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-            return json_output
+        self._set_data(payload)
 
     # ===== BLE Firmware Methods (XIO KW2 Subwoofer Module) =====
 
@@ -1890,11 +1860,7 @@ class KefConnector:
             "value": "{}",
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-            return json_output
+        self._set_data(payload)
 
     def get_ble_firmware_status(self):
         """Get BLE firmware update status (XIO soundbar only - KW2 subwoofer module).
@@ -1987,11 +1953,7 @@ class KefConnector:
             "value": "{}",
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-            return json_output
+        self._set_data(payload)
 
     def install_ble_firmware_later(self):
         """Schedule BLE firmware update for later (XIO soundbar only - KW2 subwoofer module).
@@ -2005,11 +1967,7 @@ class KefConnector:
             "value": "{}",
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-            return json_output
+        self._set_data(payload)
 
     # ===== Device Information Methods =====
 
@@ -2183,11 +2141,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_app_analytics_enabled(self):
         """Get app analytics enabled state (all models).
 
@@ -2226,11 +2180,7 @@ class KefConnector:
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_streaming_quality(self):
         """Get streaming quality bitrate (all models).
 
@@ -2272,11 +2222,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{bitrate}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_ui_language(self):
         """Get UI language setting (all models).
 
@@ -2314,11 +2260,7 @@ class KefConnector:
             "value": f'{{"type":"string_","string_":"{lang_code}"}}',
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     # Google Cast Methods
     def get_cast_usage_report(self):
         """Get Google Cast usage report setting.
@@ -2352,10 +2294,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def get_cast_tos_accepted(self):
         """Get Google Cast Terms of Service acceptance status.
@@ -2405,11 +2344,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{country_code}}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def restore_dsp_defaults(self):
         """
         Restore DSP settings to factory defaults.
@@ -2421,11 +2356,7 @@ class KefConnector:
             "roles": "value",
             "value": '{"type":"bool_","bool_":true}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def factory_reset(self):
         """
         Perform a complete factory reset of the speaker.
@@ -2444,11 +2375,7 @@ class KefConnector:
             "roles": "value",
             "value": '{"type":"bool_","bool_":true}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     def get_dsp_info(self):
         """
         Get comprehensive DSP (Digital Signal Processing) information.
@@ -2515,11 +2442,7 @@ class KefConnector:
             "roles": "value",
             "value": '{"type":"bool_","bool_":true}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     # Bluetooth Control Methods
     def get_bluetooth_state(self):
         """Get Bluetooth connection state.
@@ -2568,10 +2491,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def clear_bluetooth_devices(self):
         """Clear all paired Bluetooth devices.
@@ -2707,10 +2627,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{duration_seconds}}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def remove_timer(self, timer_id):
         """Remove a timer.
@@ -2726,10 +2643,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{timer_id}"}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def add_alarm(self, alarm_data):
         """Add an alarm.
@@ -2745,10 +2659,7 @@ class KefConnector:
             "roles": "value",
             "value": json.dumps(alarm_data),
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def remove_alarm(self, alarm_id):
         """Remove an alarm.
@@ -2764,10 +2675,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{alarm_id}"}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def enable_alarm(self, alarm_id):
         """Enable an alarm.
@@ -2783,10 +2691,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{alarm_id}"}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def disable_alarm(self, alarm_id):
         """Disable an alarm.
@@ -2802,10 +2707,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{alarm_id}"}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def remove_all_alarms(self):
         """Remove all alarms.
@@ -2885,10 +2787,7 @@ class KefConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{minutes}}}',
         }
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            return response.json()
+        return self._set_data(payload)
 
     def play_default_alert_sound(self):
         """Play default alert sound.
@@ -3036,12 +2935,7 @@ class KefConnector:
         }
         if value is not None:
             payload["value"] = value
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
-        return json_output
+        self._set_data(payload)
 
     def get_wifi_information(self):
         """Get WiFi information from speaker.
@@ -3243,11 +3137,7 @@ class KefConnector:
             ),
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     @property
     def source(self):
         """
@@ -3280,11 +3170,7 @@ class KefConnector:
             ),
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     @property
     def volume(self):
         """
@@ -3310,11 +3196,7 @@ class KefConnector:
             "value": """{{"type":"i32_","i32_":{volume}}}""".format(volume=volume),
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
+        self._set_data(payload)
     @property
     def is_playing(self):
         """
@@ -3445,12 +3327,7 @@ class KefConnector:
             "value": json.dumps(profile_dict),
         }
 
-        with requests.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = response.json()
-
-        return json_output
+        self._set_data(payload)
 
     def update_dsp_setting(self, setting_name, value):
         """Update a single DSP setting without manual dict manipulation (v2 API).
@@ -4488,8 +4365,10 @@ class KefConnector:
 
 
 class KefAsyncConnector:
-    def __init__(self, host, port=80, session=None, profile_dir=None):
+    def __init__(self, host, port=80, session=None, profile_dir=None, model=None):
         self.host = host
+        self._speaker_model = _MODEL_ALIASES.get(model, model)
+        self._fw_version_int = None
         self.port = port
         self._session = session
         self.previous_volume = (
@@ -4553,12 +4432,7 @@ class KefAsyncConnector:
             "roles": "activate",
             "value": """{{"control":"{command}"}}""".format(command=command),
         }
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def _get_player_data(self):
         """get data about currently playing media"""
         payload = {
@@ -4612,13 +4486,7 @@ class KefAsyncConnector:
         }
         if value is not None:
             payload["value"] = value
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
-        return json_output
+        await self._set_data(payload)
 
     async def get_wifi_information(self):
         """Get WiFi information from speaker.
@@ -4658,11 +4526,64 @@ class KefAsyncConnector:
                 source=source
             ),
         }
+        await self._set_data(payload)
+    async def _set_data(self, payload):
+        """Send a setData request, using POST or GET depending on firmware version."""
+        if self._speaker_model is None:
+            self._speaker_model = _MODEL_ALIASES.get(
+                await self.get_speaker_model(), await self.get_speaker_model()
+            )
+        if self._fw_version_int is None:
+            try:
+                fw = await self.get_firmware_version()
+                self._fw_version_int = int(fw[1:])
+            except (ValueError, IndexError):
+                self._fw_version_int = 0
+        threshold = _POST_FIRMWARE_THRESHOLDS.get(self._speaker_model)
         await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
+        if threshold and self._fw_version_int >= threshold:
+            post_payload = dict(payload)
+            if isinstance(post_payload.get("value"), str):
+                try:
+                    post_payload["value"] = json.loads(post_payload["value"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            async with self._session.post(
+                "http://" + self.host + "/api/setData", json=post_payload
+            ) as response:
+                return await response.json()
+        else:
+            return await self._set_data(payload)
+
+
+    async def _set_data(self, payload):
+        """Send a setData request, using POST or GET depending on firmware version."""
+        if self._speaker_model is None:
+            self._speaker_model = _MODEL_ALIASES.get(
+                await self.get_speaker_model(), await self.get_speaker_model()
+            )
+        if self._fw_version_int is None:
+            try:
+                fw = await self.get_firmware_version()
+                self._fw_version_int = int(fw[1:])
+            except (ValueError, IndexError):
+                self._fw_version_int = 0
+        threshold = _POST_FIRMWARE_THRESHOLDS.get(self._speaker_model)
+        await self.resurect_session()
+        if threshold and self._fw_version_int >= threshold:
+            post_payload = dict(payload)
+            if isinstance(post_payload.get("value"), str):
+                try:
+                    post_payload["value"] = json.loads(post_payload["value"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            async with self._session.post(
+                "http://" + self.host + "/api/setData", json=post_payload
+            ) as response:
+                return await response.json()
+        else:
+            return await self._set_data(payload)
+
 
     async def set_volume(self, volume):
         """Set speaker volume (between 0 and 100)"""
@@ -4671,12 +4592,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": """{{"type":"i32_","i32_":{volume}}}""".format(volume=volume),
         }
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     # Async Volume Management Methods (Phase 3)
     async def get_default_volume(self, input_source):
         """Get default volume for a specific input source.
@@ -4761,12 +4677,7 @@ class KefAsyncConnector:
             "value": f'{{"type":"i32_","i32_":{volume}}}',
         }
 
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_all_default_volumes(self):
         """Get default volumes for all input sources on this speaker model.
 
@@ -4892,8 +4803,7 @@ class KefAsyncConnector:
                 "roles": "value",
                 "value": f'{{"type":"i32_","i32_":{max_volume}}}',
             }
-            async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-                pass
+            await self._set_data(payload)
 
         if step is not None:
             if not 1 <= step <= 10:
@@ -4903,8 +4813,7 @@ class KefAsyncConnector:
                 "roles": "value",
                 "value": f'{{"type":"i16_","i16_":{step}}}',
             }
-            async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-                pass
+            await self._set_data(payload)
 
         if limit is not None:
             payload = {
@@ -4912,8 +4821,7 @@ class KefAsyncConnector:
                 "roles": "value",
                 "value": f'{{"type":"bool_","bool_":{str(limit).lower()}}}',
             }
-            async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-                pass
+            await self._set_data(payload)
 
     async def get_standby_volume_behavior(self):
         """Get standby volume behavior setting.
@@ -4955,12 +4863,7 @@ class KefAsyncConnector:
             "value": f'{{"type":"bool_","bool_":{str(not use_global).lower()}}}',
         }
 
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_startup_volume_enabled(self):
         """Get whether reset volume feature is enabled.
 
@@ -5005,12 +4908,7 @@ class KefAsyncConnector:
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
 
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     # Async Network Diagnostics Methods (Phase 4)
     async def ping_internet(self):
         """Ping internet to check connectivity.
@@ -5180,10 +5078,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_standby_mode(self):
         """Get auto-standby mode setting."""
         payload = {"path": "settings:/kef/host/standbyMode", "roles": "value"}
@@ -5202,10 +5097,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{mode}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_startup_tone(self):
         """Get startup tone setting."""
         payload = {"path": "settings:/kef/host/startupTone", "roles": "value"}
@@ -5221,10 +5113,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_subwoofer_wake_on_startup(self):
         """Get wake subwoofer on startup setting.
 
@@ -5254,10 +5143,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_kw1_wake_on_startup(self):
         """Get KW1 wake on startup setting.
 
@@ -5289,10 +5175,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_wake_source(self):
         """Get wake-up source setting."""
         payload = {"path": "settings:/kef/host/wakeUpSource", "roles": "value"}
@@ -5311,10 +5194,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"kefWakeUpSource","kefWakeUpSource":"{source}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_usb_charging(self):
         """Get USB charging setting."""
         payload = {"path": "settings:/kef/host/usbCharging", "roles": "value"}
@@ -5330,10 +5210,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_cable_mode(self):
         """Get cable mode (wired/wireless inter-speaker connection)."""
         payload = {"path": "settings:/kef/host/cableMode", "roles": "value"}
@@ -5352,10 +5229,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{mode}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_master_channel(self):
         """Get master channel (left/right speaker designation)."""
         payload = {"path": "settings:/kef/host/masterChannelMode", "roles": "value"}
@@ -5374,10 +5248,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"kefMasterChannelMode","kefMasterChannelMode":"{channel}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_speaker_status(self):
         """Get speaker power status."""
         payload = {"path": "settings:/kef/host/speakerStatus", "roles": "value"}
@@ -5411,10 +5282,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_standby_led(self):
         """Get standby LED setting."""
         payload = {"path": "settings:/kef/host/disableFrontStandbyLED", "roles": "value"}
@@ -5431,10 +5299,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_top_panel_enabled(self):
         """Get top panel (touch controls) enabled setting."""
         payload = {"path": "settings:/kef/host/disableTopPanel", "roles": "value"}
@@ -5451,10 +5316,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_top_panel_led(self):
         """Get top panel LED setting (XIO only).
 
@@ -5479,10 +5341,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_top_panel_standby_led(self):
         """Get top panel standby LED setting (XIO only).
 
@@ -5507,10 +5366,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     # ===== Remote Control Methods (Async) =====
 
     async def get_remote_ir_enabled(self):
@@ -5544,10 +5400,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_ir_code_set(self):
         """Get IR code set (used to avoid conflicts with other devices).
 
@@ -5584,10 +5437,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{code_set}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_eq_button(self, button_num):
         """Get EQ button preset (XIO soundbar only).
 
@@ -5634,10 +5484,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{preset}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_favourite_button_action(self):
         """Get favourite button action.
 
@@ -5668,10 +5515,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{action}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_fixed_volume_mode(self):
         """Get fixed volume mode setting.
 
@@ -5712,10 +5556,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{volume}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     # ===== XIO Calibration Methods (Async) =====
 
     async def get_calibration_status(self):
@@ -5818,12 +5659,7 @@ class KefAsyncConnector:
             "value": "{}",
         }
 
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-            return json_output
+        await self._set_data(payload)
 
     async def stop_calibration(self):
         """Stop room calibration in progress (XIO soundbar only).
@@ -5839,12 +5675,7 @@ class KefAsyncConnector:
             "value": "{}",
         }
 
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-            return json_output
+        await self._set_data(payload)
 
     # ===== BLE Firmware Methods (Async - XIO KW2 Subwoofer Module) =====
 
@@ -5867,10 +5698,7 @@ class KefAsyncConnector:
             "roles": "activate",
             "value": "{}",
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-        return json_output
+        await self._set_data(payload)
 
     async def get_ble_firmware_status(self):
         """Get BLE firmware update status (XIO soundbar only - KW2 subwoofer module).
@@ -5947,10 +5775,7 @@ class KefAsyncConnector:
             "roles": "activate",
             "value": "{}",
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-            return json_output
+        await self._set_data(payload)
 
     async def install_ble_firmware_later(self):
         """Schedule BLE firmware update for later (XIO soundbar only - KW2 subwoofer module).
@@ -5963,10 +5788,7 @@ class KefAsyncConnector:
             "roles": "activate",
             "value": "{}",
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-            return json_output
+        await self._set_data(payload)
 
     # ===== Device Information Methods (Async) =====
 
@@ -6093,10 +5915,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_app_analytics_enabled(self):
         """Get app analytics enabled state (all models)."""
         payload = {"path": "settings:/kef/host/disableAppAnalytics", "roles": "value"}
@@ -6113,10 +5932,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(disabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_streaming_quality(self):
         """Get streaming quality bitrate (all models)."""
         payload = {"path": "settings:/airable/bitrate", "roles": "value"}
@@ -6136,10 +5952,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{bitrate}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_ui_language(self):
         """Get UI language setting (all models)."""
         payload = {"path": "settings:/ui/language", "roles": "value"}
@@ -6155,10 +5968,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{lang_code}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     # ===== Advanced Operations (Async) =====
 
     async def get_speaker_location(self):
@@ -6194,10 +6004,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{country_code}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def restore_dsp_defaults(self):
         """Restore DSP settings to factory defaults (all models).
 
@@ -6213,10 +6020,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": '{"type":"bool_","bool_":true}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def factory_reset(self):
         """Perform a complete factory reset of the speaker (all models).
 
@@ -6238,10 +6042,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": '{"type":"bool_","bool_":true}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_dsp_info(self):
         """Get comprehensive DSP (Digital Signal Processing) information (all models).
 
@@ -6329,10 +6130,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": '{"type":"bool_","bool_":true}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     # Bluetooth Control Methods (Async)
     async def get_bluetooth_state(self):
         """Get Bluetooth connection state.
@@ -6373,9 +6171,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def clear_bluetooth_devices(self):
         """Clear all paired Bluetooth devices.
@@ -6483,9 +6279,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{duration_seconds}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def remove_timer(self, timer_id):
         """Remove a timer.
@@ -6501,9 +6295,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{timer_id}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def add_alarm(self, alarm_data):
         """Add an alarm.
@@ -6519,9 +6311,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": json.dumps(alarm_data),
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def remove_alarm(self, alarm_id):
         """Remove an alarm.
@@ -6537,9 +6327,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{alarm_id}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def enable_alarm(self, alarm_id):
         """Enable an alarm.
@@ -6555,9 +6343,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{alarm_id}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def disable_alarm(self, alarm_id):
         """Disable an alarm.
@@ -6573,9 +6359,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"string_","string_":"{alarm_id}"}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def remove_all_alarms(self):
         """Remove all alarms.
@@ -6639,9 +6423,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"i32_","i32_":{minutes}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def play_default_alert_sound(self):
         """Play default alert sound.
@@ -6694,9 +6476,7 @@ class KefAsyncConnector:
             "roles": "value",
             "value": f'{{"type":"bool_","bool_":{str(enabled).lower()}}}',
         }
-        await self.resurect_session()
-        async with self._session.get("http://" + self.host + "/api/setData", params=payload) as response:
-            return await response.json()
+        return await self._set_data(payload)
 
     async def get_cast_tos_accepted(self):
         """Get Google Cast Terms of Service acceptance status.
@@ -6721,12 +6501,7 @@ class KefAsyncConnector:
                 status=status
             ),
         }
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
+        await self._set_data(payload)
     async def get_song_information(self, song_data=None):
         """Get song title, album and artist"""
         if song_data == None:
@@ -7101,13 +6876,7 @@ class KefAsyncConnector:
             "value": json.dumps(profile_dict),
         }
 
-        await self.resurect_session()
-        async with self._session.get(
-            "http://" + self.host + "/api/setData", params=payload
-        ) as response:
-            json_output = await response.json()
-
-        return json_output
+        await self._set_data(payload)
 
     async def update_dsp_setting(self, setting_name, value):
         """Update a single DSP setting (v2 API with direct dB/Hz values).
