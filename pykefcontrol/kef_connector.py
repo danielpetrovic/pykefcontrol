@@ -2839,8 +2839,10 @@ class KefConnector:
         """
         Get song title, album and artist
         """
-        if song_data == None:
+        if song_data is None:
             song_data = self._get_player_data()
+        if not song_data or not isinstance(song_data, dict):
+            return {}
         info_dict = dict()
         info_dict["title"] = song_data.get("trackRoles", {}).get("title")
 
@@ -6507,8 +6509,10 @@ class KefAsyncConnector:
         await self._set_data(payload)
     async def get_song_information(self, song_data=None):
         """Get song title, album and artist"""
-        if song_data == None:
+        if song_data is None:
             song_data = await self._get_player_data()
+        if not song_data or not isinstance(song_data, dict):
+            return {}
         info_dict = dict()
         info_dict["title"] = song_data.get("trackRoles", {}).get("title")
 
@@ -6536,6 +6540,8 @@ class KefAsyncConnector:
         try:
             if player_data is None:
                 player_data = await self._get_player_data()
+            if not player_data or not isinstance(player_data, dict):
+                return {}
 
             codec_dict = {}
             active_resource = (
