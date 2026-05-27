@@ -6,8 +6,8 @@ import time
 import warnings
 
 
-_POST_MODELS = {"LS50WII", "LSXIILT", "LSXII", "LS60"}
-_MODEL_ALIASES = {"LS50W2": "LS50WII", "LSX2LT": "LSXIILT", "LSX2": "LSXII"}
+_POST_MODELS = {"LS50WII", "LSXIILT", "LSXII", "LS60W", "XIO"}
+_MODEL_ALIASES = {"LS50W2": "LS50WII", "LSX2LT": "LSXIILT", "LSX2": "LSXII", "LS60": "LS60W", "LS60Wireless": "LS60W"}
 
 
 class KefConnector:
